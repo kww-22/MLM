@@ -1,0 +1,211 @@
+---
+title: "Exploring Job Satisfaction"
+author: "Kyle Wasserberger"
+date: "Last Updated: 7/10/2020"
+output: 
+  html_document:
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      results = "asis")
+library(kableExtra)
+library(psych)
+library(lmerTest)
+library(ggplot2)
+library(texreg)
+library(interactions)
+```
+
+# Introduction
+
+The purpose of this assignment was to estimate the relation between satisfaction with pay and morale. Seondary purposes were to elucidate any differences in this relationship dependent on sex and race as well as investigate the moderating effects of percentage of people below the mean morale score within department.
+
+# Data Inport & Cleaning
+
+We start by importing and cleaning the data.
+
+```{r import and clean, warning=FALSE}
+# import
+jobsat <- read.table("data/jobsat.txt", header = TRUE)
+
+# change factors to factors
+jobsat <- within(jobsat, {
+  deptid <- factor(deptid)
+  female <- factor(female,labels = c('male','female'))
+  white <- factor(white,labels = c('non-white','white'))
+})
+
+# view data summary
+describe(jobsat, fast = TRUE, check = TRUE) %>%
+  round(digits = 2) %>%
+  kable() %>%
+  kable_styling()
+
+```
+
+Basic statistics for relevant variables can be found in the above table. We will ignore *lev1wt* and *lev2wt* for this assignment.
+
+# Data Analysis
+
+## Bivariate Scatter Plot and Simple Regression
+We can start with some basic scatter plots. First, we can plot the bivariate relationship between *pay satisfaction* andd *morale* for our entire sample.
+
+```{r plot1}
+ggplot(jobsat, aes(x = jitter(satpay), y = morale)) +
+  geom_point(alpha = .3) +
+  theme_bw() +
+  geom_smooth(method = 'lm') +
+  xlab('Pay Satisfaction') +
+  ylab('Employee Morale')
+```
+
+We can see a general increase in *morale* as *pay satisfaction* goes up. On average, we would estamate a 1.22 unit increase in *morale* for every 1 unit increase in *pay satisfaction*.
+
+```{r results='asis'}
+# base model
+mod0 <- lmer(morale ~ satpay + (1 | deptid), data = jobsat, REML = FALSE)
+
+# display model
+htmlreg(mod0,
+        single.row = TRUE,
+        caption = 'base model')
+```
+
+## Race and Sex Dependent Differences
+
+To investigate if the basic relationship between *morale* and *pay satisfaction* changes depending on race or sex we can include each predictor in our linear model.
+
+```{r sex/race}
+
+# race model
+mod.r <- lmer(morale ~ satpay + white + (1 | deptid), data = jobsat, REML = FALSE)
+
+# gender model
+mod.s <- lmer(morale ~ satpay + female + (1 | deptid), data = jobsat, REML = FALSE)
+
+# display models
+htmlreg(list(mod.r,mod.s),
+        single.row = TRUE,
+        caption = 'Race & Sex Models',
+        custom.model.names = c('Race Model','Sex Model'),
+        custom.coef.names = c('Intercept','Pay Satisfaction','Race','Sex'))
+
+```
+
+We can see that race has a significant effect on morale in our sample while gender does not. We would expect white employees to have a .92 unit higher morale than a non-white employee given the same pay satisfaction score. This is also shown by plotting the data
+
+```{r sex/race plots}
+# Plot differences in satpay vs. morale by race
+ggplot(jobsat, aes(x = jitter(satpay), y = morale, color = white)) +
+  geom_point(alpha = .3) +
+  theme_bw() +
+  #facet_wrap(~ white) +
+  geom_smooth(method = 'lm') +
+  xlab('Pay Satisfaction') +
+  ylab('Employee Morale')
+
+# plot differences in satpay vs. morale by sex
+ggplot(jobsat, aes(x = jitter(satpay), y = morale, color = female)) +
+  geom_point(alpha = .3) +
+  theme_bw() +
+  #facet_wrap(~ female) +
+  geom_smooth(method = 'lm') +
+  xlab('Pay Satisfaction') +
+  ylab('Employee Morale')
+```
+
+Now lets center some variables for our model building. Once we have our centered variables, we will be able to interpret out models more easily.
+
+```{r center variables}
+# centering function
+ctr <- function(x) {x - mean(x)}
+
+# centered variables
+c.satpay <- ctr(jobsat$satpay)
+c.morale <- ctr(jobsat$morale)
+c.pctbelow <- ctr(jobsat$pctbelow)
+```
+
+```{r centered sex/race}
+
+# centered race model
+mod.rc <- lmer(morale ~ c.satpay + white + (1 | deptid), data = jobsat, REML = FALSE)
+
+# display models
+htmlreg(list(mod.r,mod.rc),
+        single.row = TRUE,
+        caption = 'Race Models',
+        custom.model.names = c('Raw Model','Centered Model'),
+        custom.coef.names = c('Intercept','Pay Satisfaction','Race','Pay Satisfaction (centered)'))
+
+```
+
+Grand mean centering does not change the predictor coefficients or our model fit statistics. However, it does make our intercept more interpretable. Our centered model intercept represents the predicted morale score for non-white employees with average pay satisfaction. The 0.92 coefficient for *Race* again indicates that the predicted morale for white employees with average pay satisfaction will equal 26.02 + 0.92; or 26.94.
+
+## *%below* Mediation
+
+To investigate whether the percentage of employees below the sample mean morale score mediates the relationship between *pay satisfaction* and *morale*, we can use a mediation framework (outlined below).
+
+```{r mediation model}
+# step one: test simple regression of pay satisfaction on morale
+mod.1 <- lmer(morale ~ c.satpay + (1 | deptid), data = jobsat, REML = FALSE)
+
+# step two: test simple regression of pay satisfaction on %below
+mod.2 <- lmer(c.pctbelow ~ c.satpay + (1 | deptid), data = jobsat, REML = FALSE)
+
+# step three: test simple regression of %below on morale
+mod.3 <- lmer(morale ~ c.pctbelow + (1 | deptid), data = jobsat, REML = FALSE)
+
+# step four: test multiple regression with pay satisfaction and %below on morale
+mod.4 <- lmer(morale ~ c.satpay + c.pctbelow + (1 | deptid), data = jobsat, REML = FALSE)
+
+# need to figure out how to right-justify coefficient cells...
+htmlreg(list(mod.1,mod.2,mod.3,mod.4),
+        caption = 'Mediation',
+        custom.coef.names = c('Intercept','Pay Sat','%below'),
+        custom.model.names = c('X on Y','X on M','M on Y','X + M on Y'))
+```
+
+We can see that both our predictor of interest (*pay satisfaction*) and our mediator of interest (*%below*) are related to morale. However, there is no evidence of a relationship between *pay satisfaction* and *%below*. Furthermore, the direct effect of *pay satisfaction* does not change when introducing the *%below* to the model. This indicates a lack of mediation effect for *%below*.
+
+## *%below* Moderation (what the assignment actually asked for)
+
+To investigate whether the percentage of employees below the sample mean morale score moderates the relationship between *pay satisfaction* and *morale*, we can add *pctbelow* and an interaction term between *pay satisfaction* and *pctbelow*.
+
+```{r %below models}
+# main effect model
+mod.pct <- lmer(morale ~ c.satpay + c.pctbelow + white + (1 | deptid), data = jobsat, REML = FALSE)
+
+# interaction model
+mod.int <- lmer(morale ~ c.satpay*c.pctbelow + white + (1 | deptid), data = jobsat, REML = FALSE)
+
+htmlreg(list(mod.rc, mod.pct, mod.int),
+        single.row = TRUE,
+        caption = 'Moderation',
+        custom.model.names = c('Race Model','%below Main Effect','Moderation Model'),
+        custom.coef.names = c('Intercept','Pay Sat','Race','%below','Pay Sat*%below'))
+
+```
+
+From the interaction plot we can see greater moderation effects of *%below* at low levels of pay satisfaction. The effect of *%below* lessens as pay satisfaction increases.
+
+```{r interaction plot}
+interact_plot(model = mod.int, pred = c.satpay, modx = c.pctbelow,
+              legend.main = '%below',
+              main.title = 'Interaction Plot (pay satisfaction * %below)',
+              x.label = 'Pay Satisfaction',
+              y.label = 'Employee Morale')
+
+
+```
+
+Using the Johnson-Neyman plot, we can also see evidence that our interaction is significant throughout the domain for our moderator.
+
+```{r johnson-neyman, message=FALSE}
+johnson_neyman(model = mod.int, pred = c.satpay, modx = c.pctbelow)
+```
+
